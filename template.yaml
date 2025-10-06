@@ -1,0 +1,342 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Globals:
+  Function:
+    MemorySize: 128
+    Architectures:
+      - arm64
+    Handler: bootstrap
+    Runtime: provided.al2
+    Timeout: 5
+    Tracing: Active
+
+Parameters:
+  SlackToken:
+    Type: String
+    Description: Slack Token for notifications
+    Default: ''
+  SlackChannelID:
+    Type: String
+    Description: Slack Channel ID for notifications
+    Default: ''
+  LinkTableName:
+    Type: String
+    Description: Name of the DynamoDB table for storing links
+    Default: link-table-db
+  StastTableName:
+    Type: String
+    Description: Name of the DynamoDB table for storing stats
+    Default: stats-table-db
+
+Resources:
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [lambda.amazonaws.com]
+            Action: ['sts:AssumeRole']
+      Policies:
+        - PolicyName: LambdaExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: 'arn:aws:logs:*:*:*'
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource:
+                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LinkTableName}
+                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${StastTableName}
+
+  NotificationFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [lambda.amazonaws.com]
+            Action: ['sts:AssumeRole']
+      Policies:
+        - PolicyName: NotificationFunctionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: 'arn:aws:logs:*:*:*'
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: !GetAtt NotificationQueue.Arn
+
+  GenerateLinkFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [lambda.amazonaws.com]
+            Action: ['sts:AssumeRole']
+      Policies:
+        - PolicyName: GenerateLinkFunctionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: 'arn:aws:logs:*:*:*'
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource:
+                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LinkTableName}
+                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${StastTableName}
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                Resource: !GetAtt NotificationQueue.Arn
+
+  LambdaDynamoDBPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: LambdaDynamoDBPolicy
+      Roles:
+        - !Ref LambdaExecutionRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - dynamodb:GetItem
+              - dynamodb:PutItem
+              - dynamodb:UpdateItem
+              - dynamodb:DeleteItem
+              - dynamodb:Query
+              - dynamodb:Scan
+            Resource:
+              - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LinkTableName}
+              - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${StastTableName}
+
+  LambdaSQSPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: LambdaSQSPolicy
+      Roles:
+        - !Ref LambdaExecutionRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - sqs:SendMessage
+            Resource: !GetAtt NotificationQueue.Arn
+
+  NotificationQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: NotificationQueue
+
+  GenerateLinkFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: internal/adapters/functions/generate/
+      Role: !GetAtt GenerateLinkFunctionRole.Arn
+      Handler: main
+      Policies:
+        - !Ref LambdaDynamoDBPolicy
+        - !Ref LambdaSQSPolicy
+      Environment:
+        Variables:
+          LinkTableName: !Ref LinkTableName
+          StastTableName: !Ref StastTableName
+          QueueUrl: !GetAtt NotificationQueue.QueueUrl
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            Path: /generate
+            Method: PUT
+
+  RedirectLinkFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: internal/adapters/functions/redirect/
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Policies:
+        - !Ref LambdaDynamoDBPolicy
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            Path: /t/{id}
+            Method: GET
+      Environment:
+        Variables:
+          LinkTableName: !Ref LinkTableName
+          StastTableName: !Ref StastTableName
+
+  StatsLinkFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: internal/adapters/functions/stats/
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Policies:
+        - !Ref LambdaDynamoDBPolicy
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            Path: /stats
+            Method: GET
+      Environment:
+        Variables:
+          LinkTableName: !Ref LinkTableName
+          StastTableName: !Ref StastTableName
+
+  NotificationLinkFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: internal/adapters/functions/notification/
+      Role: !GetAtt NotificationFunctionRole.Arn
+      Policies:
+        - !Ref LambdaDynamoDBPolicy
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            Path: /notification
+            Method: POST
+        SQSEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt NotificationQueue.Arn
+            BatchSize: 10
+      Environment:
+        Variables:
+          SlackToken: !Ref SlackToken
+          SlackChannelID: !Ref SlackChannelID
+
+  DeleteLinkFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: internal/adapters/functions/delete/
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Policies:
+        - !Ref LambdaDynamoDBPolicy
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            Path: /delete
+            Method: DELETE
+      Environment:
+        Variables:
+          LinkTableName: !Ref LinkTableName
+          StastTableName: !Ref StastTableName
+
+  LinkTableDB:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref LinkTableName
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      BillingMode: PAY_PER_REQUEST
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+
+  StatsTableDB:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref StastTableName
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      BillingMode: PAY_PER_REQUEST
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+
+  ServerlessHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowMethods:
+          - GET
+          - POST
+        AllowOrigins:
+          - !Sub https://${CloudFrontDistributionDomainName}/*
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub '${AWS::StackName} API Gateway CloudFront Distribution'
+        DefaultCacheBehavior:
+          TargetOriginId: 'ApiGatewayOrigin'
+          ViewerProtocolPolicy: 'redirect-to-https'
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+            - PUT
+            - POST
+            - PATCH
+            - DELETE
+          CachedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          ForwardedValues:
+            QueryString: true
+            Headers:
+              - Origin
+        Origins:
+          - Id: 'ApiGatewayOrigin'
+            DomainName: !Sub '${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com'
+            CustomOriginConfig:
+              HTTPPort: 80
+              HTTPSPort: 443
+              OriginProtocolPolicy: 'https-only'
+
+Outputs:
+  ApiUrl:
+    Description: API Gateway endpoint URL
+    Value: !Sub https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com/
+
+  CloudFrontDistributionDomainName:
+    Description: 'CloudFront Distribution Domain Name'
+    Value: !GetAtt CloudFrontDistribution.DomainName
