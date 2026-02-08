@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/Furkan-Gulsen/golang-url-shortener/internal/config"
+	"github.com/dheeraj-vp/golang-url-shortener/internal/config"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/slack-go/slack"
 )

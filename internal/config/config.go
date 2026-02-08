@@ -55,10 +55,10 @@ func (c *AppConfig) GetLinkTableName() string {
 }
 
 func (c *AppConfig) GetStatsTableName() string {
-	tableName, ok := os.LookupEnv("StastTableName")
+	tableName, ok := os.LookupEnv("StatsTableName")
 	if !ok {
 		fmt.Println("Need STATS_TABLE environment variable")
-		return os.Getenv("StastTableName")
+		return os.Getenv("StatsTableName")
 	}
 	return tableName
 }

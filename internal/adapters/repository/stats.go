@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/Furkan-Gulsen/golang-url-shortener/internal/core/domain"
+	"github.com/dheeraj-vp/golang-url-shortener/internal/core/domain"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"

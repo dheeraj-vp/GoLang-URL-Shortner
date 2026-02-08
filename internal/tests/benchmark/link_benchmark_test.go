@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Furkan-Gulsen/golang-url-shortener/internal/adapters/cache"
-	"github.com/Furkan-Gulsen/golang-url-shortener/internal/core/domain"
-	"github.com/Furkan-Gulsen/golang-url-shortener/internal/core/services"
-	"github.com/Furkan-Gulsen/golang-url-shortener/internal/tests/mock"
+	"github.com/dheeraj-vp/golang-url-shortener/internal/adapters/cache"
+	"github.com/dheeraj-vp/golang-url-shortener/internal/core/domain"
+	"github.com/dheeraj-vp/golang-url-shortener/internal/core/services"
+	"github.com/dheeraj-vp/golang-url-shortener/internal/tests/mock"
 	"github.com/google/uuid"
 )
 

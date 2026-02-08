@@ -3,7 +3,7 @@ package ports
 import (
 	"context"
 
-	"github.com/Furkan-Gulsen/golang-url-shortener/internal/core/domain"
+	"github.com/dheeraj-vp/golang-url-shortener/internal/core/domain"
 )
 
 type LinkPort interface {

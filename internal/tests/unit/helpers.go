@@ -3,8 +3,8 @@ package unit
 import (
 	"context"
 
-	"github.com/Furkan-Gulsen/golang-url-shortener/internal/adapters/cache"
-	"github.com/Furkan-Gulsen/golang-url-shortener/internal/core/domain"
+	"github.com/dheeraj-vp/golang-url-shortener/internal/adapters/cache"
+	"github.com/dheeraj-vp/golang-url-shortener/internal/core/domain"
 )
 
 func FillCache(cache *cache.RedisCache, links []domain.Link) error {

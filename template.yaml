@@ -15,6 +15,7 @@ Parameters:
     Type: String
     Description: Slack Token for notifications
     Default: ''
+    NoEcho: true
   SlackChannelID:
     Type: String
     Description: Slack Channel ID for notifications
@@ -23,12 +24,240 @@ Parameters:
     Type: String
     Description: Name of the DynamoDB table for storing links
     Default: link-table-db
-  StastTableName:
+  StatsTableName:
     Type: String
     Description: Name of the DynamoDB table for storing stats
     Default: stats-table-db
+  EnableElastiCache:
+    Type: String
+    Description: Enable ElastiCache for Redis caching
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+  ElastiCacheNodeType:
+    Type: String
+    Description: ElastiCache node type
+    Default: cache.t3.micro
+  Environment:
+    Type: String
+    Description: Environment name (dev, staging, prod)
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+
+Conditions:
+  EnableCache: !Equals [!Ref EnableElastiCache, 'true']
 
 Resources:
+  # VPC Configuration
+  VPC:
+    Type: AWS::EC2::VPC
+    Condition: EnableCache
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-VPC
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Condition: EnableCache
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-PrivateSubnet1
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Condition: EnableCache
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-PrivateSubnet2
+
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: EnableCache
+    Properties:
+      GroupDescription: Security group for Lambda functions
+      VpcId: !Ref VPC
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  RedisSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: EnableCache
+    Properties:
+      GroupDescription: Security group for Redis
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 6379
+          ToPort: 6379
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup
+
+  RedisSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    Condition: EnableCache
+    Properties:
+      Description: Subnet group for Redis
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+
+  RedisCluster:
+    Type: AWS::ElastiCache::CacheCluster
+    Condition: EnableCache
+    Properties:
+      CacheNodeType: !Ref ElastiCacheNodeType
+      Engine: redis
+      NumCacheNodes: 1
+      VpcSecurityGroupIds:
+        - !Ref RedisSecurityGroup
+      CacheSubnetGroupName: !Ref RedisSubnetGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-Redis
+
+  # CloudWatch Alarms
+  HighErrorRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${AWS::StackName}-HighErrorRate
+      AlarmDescription: Alert when Lambda error rate is high
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  DynamoDBThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${AWS::StackName}-DynamoDBThrottle
+      AlarmDescription: Alert when DynamoDB is being throttled
+      MetricName: UserErrors
+      Namespace: AWS/DynamoDB
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+
+  # Separate roles for different Lambda functions (least privilege)
+  RedirectFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [lambda.amazonaws.com]
+            Action: ['sts:AssumeRole']
+      ManagedPolicyArns:
+        - !If
+          - EnableCache
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: RedirectFunctionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                Resource:
+                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LinkTableName}
+                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${StatsTableName}
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                Resource: '*'
+
+  StatsFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [lambda.amazonaws.com]
+            Action: ['sts:AssumeRole']
+      ManagedPolicyArns:
+        - !If
+          - EnableCache
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: StatsFunctionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:Scan
+                  - dynamodb:Query
+                Resource:
+                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LinkTableName}
+                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${StatsTableName}
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                Resource: '*'
+
+  DeleteFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [lambda.amazonaws.com]
+            Action: ['sts:AssumeRole']
+      ManagedPolicyArns:
+        - !If
+          - EnableCache
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DeleteFunctionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:DeleteItem
+                Resource:
+                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LinkTableName}
+                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${StatsTableName}
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                Resource: '*'
+
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -39,17 +268,16 @@ Resources:
             Principal:
               Service: [lambda.amazonaws.com]
             Action: ['sts:AssumeRole']
+      ManagedPolicyArns:
+        - !If
+          - EnableCache
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
         - PolicyName: LambdaExecutionPolicy
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                Resource: 'arn:aws:logs:*:*:*'
               - Effect: Allow
                 Action:
                   - dynamodb:GetItem
@@ -60,7 +288,12 @@ Resources:
                   - dynamodb:Scan
                 Resource:
                   - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LinkTableName}
-                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${StastTableName}
+                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${StatsTableName}
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                Resource: '*'
 
   NotificationFunctionRole:
     Type: AWS::IAM::Role
@@ -121,46 +354,11 @@ Resources:
                   - dynamodb:Scan
                 Resource:
                   - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LinkTableName}
-                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${StastTableName}
+                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${StatsTableName}
               - Effect: Allow
                 Action:
                   - sqs:SendMessage
                 Resource: !GetAtt NotificationQueue.Arn
-
-  LambdaDynamoDBPolicy:
-    Type: AWS::IAM::Policy
-    Properties:
-      PolicyName: LambdaDynamoDBPolicy
-      Roles:
-        - !Ref LambdaExecutionRole
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Action:
-              - dynamodb:GetItem
-              - dynamodb:PutItem
-              - dynamodb:UpdateItem
-              - dynamodb:DeleteItem
-              - dynamodb:Query
-              - dynamodb:Scan
-            Resource:
-              - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LinkTableName}
-              - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${StastTableName}
-
-  LambdaSQSPolicy:
-    Type: AWS::IAM::Policy
-    Properties:
-      PolicyName: LambdaSQSPolicy
-      Roles:
-        - !Ref LambdaExecutionRole
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Action:
-              - sqs:SendMessage
-            Resource: !GetAtt NotificationQueue.Arn
 
   NotificationQueue:
     Type: AWS::SQS::Queue
@@ -173,14 +371,26 @@ Resources:
       CodeUri: internal/adapters/functions/generate/
       Role: !GetAtt GenerateLinkFunctionRole.Arn
       Handler: main
-      Policies:
-        - !Ref LambdaDynamoDBPolicy
-        - !Ref LambdaSQSPolicy
+      VpcConfig:
+        !If
+          - EnableCache
+          - SecurityGroupIds:
+              - !Ref LambdaSecurityGroup
+            SubnetIds:
+              - !Ref PrivateSubnet1
+              - !Ref PrivateSubnet2
+          - !Ref AWS::NoValue
       Environment:
         Variables:
           LinkTableName: !Ref LinkTableName
-          StastTableName: !Ref StastTableName
+          StatsTableName: !Ref StatsTableName
           QueueUrl: !GetAtt NotificationQueue.QueueUrl
+          RedisAddress: !If
+            - EnableCache
+            - !Sub '${RedisCluster.RedisEndpoint.Address}:${RedisCluster.RedisEndpoint.Port}'
+            - 'localhost:6379'
+          RedisPassword: ''
+          RedisDB: '0'
       Events:
         Api:
           Type: HttpApi
@@ -192,45 +402,69 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: internal/adapters/functions/redirect/
-      Role: !GetAtt LambdaExecutionRole.Arn
-      Policies:
-        - !Ref LambdaDynamoDBPolicy
+      Role: !GetAtt RedirectFunctionRole.Arn
       Events:
         Api:
           Type: HttpApi
           Properties:
             Path: /t/{id}
             Method: GET
+      VpcConfig:
+        !If
+          - EnableCache
+          - SecurityGroupIds:
+              - !Ref LambdaSecurityGroup
+            SubnetIds:
+              - !Ref PrivateSubnet1
+              - !Ref PrivateSubnet2
+          - !Ref AWS::NoValue
       Environment:
         Variables:
           LinkTableName: !Ref LinkTableName
-          StastTableName: !Ref StastTableName
+          StatsTableName: !Ref StatsTableName
+          RedisAddress: !If
+            - EnableCache
+            - !Sub '${RedisCluster.RedisEndpoint.Address}:${RedisCluster.RedisEndpoint.Port}'
+            - 'localhost:6379'
+          RedisPassword: ''
+          RedisDB: '0'
 
   StatsLinkFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: internal/adapters/functions/stats/
-      Role: !GetAtt LambdaExecutionRole.Arn
-      Policies:
-        - !Ref LambdaDynamoDBPolicy
+      Role: !GetAtt StatsFunctionRole.Arn
       Events:
         Api:
           Type: HttpApi
           Properties:
             Path: /stats
             Method: GET
+      VpcConfig:
+        !If
+          - EnableCache
+          - SecurityGroupIds:
+              - !Ref LambdaSecurityGroup
+            SubnetIds:
+              - !Ref PrivateSubnet1
+              - !Ref PrivateSubnet2
+          - !Ref AWS::NoValue
       Environment:
         Variables:
           LinkTableName: !Ref LinkTableName
-          StastTableName: !Ref StastTableName
+          StatsTableName: !Ref StatsTableName
+          RedisAddress: !If
+            - EnableCache
+            - !Sub '${RedisCluster.RedisEndpoint.Address}:${RedisCluster.RedisEndpoint.Port}'
+            - 'localhost:6379'
+          RedisPassword: ''
+          RedisDB: '0'
 
   NotificationLinkFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: internal/adapters/functions/notification/
       Role: !GetAtt NotificationFunctionRole.Arn
-      Policies:
-        - !Ref LambdaDynamoDBPolicy
       Events:
         Api:
           Type: HttpApi
@@ -251,19 +485,32 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: internal/adapters/functions/delete/
-      Role: !GetAtt LambdaExecutionRole.Arn
-      Policies:
-        - !Ref LambdaDynamoDBPolicy
+      Role: !GetAtt DeleteFunctionRole.Arn
       Events:
         Api:
           Type: HttpApi
           Properties:
-            Path: /delete
+            Path: /delete/{id}
             Method: DELETE
+      VpcConfig:
+        !If
+          - EnableCache
+          - SecurityGroupIds:
+              - !Ref LambdaSecurityGroup
+            SubnetIds:
+              - !Ref PrivateSubnet1
+              - !Ref PrivateSubnet2
+          - !Ref AWS::NoValue
       Environment:
         Variables:
           LinkTableName: !Ref LinkTableName
-          StastTableName: !Ref StastTableName
+          StatsTableName: !Ref StatsTableName
+          RedisAddress: !If
+            - EnableCache
+            - !Sub '${RedisCluster.RedisEndpoint.Address}:${RedisCluster.RedisEndpoint.Port}'
+            - 'localhost:6379'
+          RedisPassword: ''
+          RedisDB: '0'
 
   LinkTableDB:
     Type: AWS::DynamoDB::Table
@@ -280,7 +527,7 @@ Resources:
   StatsTableDB:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: !Ref StastTableName
+      TableName: !Ref StatsTableName
       AttributeDefinitions:
         - AttributeName: id
           AttributeType: S
@@ -340,3 +587,27 @@ Outputs:
   CloudFrontDistributionDomainName:
     Description: 'CloudFront Distribution Domain Name'
     Value: !GetAtt CloudFrontDistribution.DomainName
+
+  RedisEndpoint:
+    Description: Redis cluster endpoint
+    Value: !If
+      - EnableCache
+      - !Sub '${RedisCluster.RedisEndpoint.Address}:${RedisCluster.RedisEndpoint.Port}'
+      - 'ElastiCache not enabled'
+    Condition: EnableCache
+
+  LinkTableName:
+    Description: DynamoDB table name for links
+    Value: !Ref LinkTableName
+
+  StatsTableName:
+    Description: DynamoDB table name for stats
+    Value: !Ref StatsTableName
+
+  NotificationQueueUrl:
+    Description: SQS Queue URL for notifications
+    Value: !Ref NotificationQueue
+
+  Environment:
+    Description: Deployment environment
+    Value: !Ref Environment

@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Furkan-Gulsen/golang-url-shortener/internal/core/domain"
-	"github.com/Furkan-Gulsen/golang-url-shortener/internal/core/ports"
+	"github.com/dheeraj-vp/golang-url-shortener/internal/core/domain"
+	"github.com/dheeraj-vp/golang-url-shortener/internal/core/ports"
 )
 
 type StatsService struct {

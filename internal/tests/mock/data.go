@@ -1,6 +1,6 @@
 package mock
 
-import "github.com/Furkan-Gulsen/golang-url-shortener/internal/core/domain"
+import "github.com/dheeraj-vp/golang-url-shortener/internal/core/domain"
 
 var MockLinkData []domain.Link = []domain.Link{
 	{Id: "testid1", OriginalURL: "https://example.com/link1"},

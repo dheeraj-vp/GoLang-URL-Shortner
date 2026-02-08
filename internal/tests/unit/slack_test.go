@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/Furkan-Gulsen/golang-url-shortener/internal/adapters/handlers"
+	"github.com/dheeraj-vp/golang-url-shortener/internal/adapters/handlers"
 	"github.com/stretchr/testify/assert"
 )
 

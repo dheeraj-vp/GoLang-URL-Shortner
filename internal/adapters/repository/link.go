@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/Furkan-Gulsen/golang-url-shortener/internal/core/domain"
+	"github.com/dheeraj-vp/golang-url-shortener/internal/core/domain"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -33,24 +33,60 @@ func NewLinkRepository(ctx context.Context, tableName string) *LinkRepository {
 
 func (d *LinkRepository) All(ctx context.Context) ([]domain.Link, error) {
 	var links []domain.Link
+	var lastEvaluatedKey map[string]ddbtypes.AttributeValue
+
+	// Paginate through all results
+	for {
+		input := &dynamodb.ScanInput{
+			TableName:         &d.tableName,
+			Limit:             aws.Int32(20),
+			ExclusiveStartKey: lastEvaluatedKey,
+		}
+
+		result, err := d.client.Scan(ctx, input)
+		if err != nil {
+			return links, fmt.Errorf("failed to get items from DynamoDB: %w", err)
+		}
+
+		var pageLinks []domain.Link
+		err = attributevalue.UnmarshalListOfMaps(result.Items, &pageLinks)
+		if err != nil {
+			return links, fmt.Errorf("failed to unmarshal data from DynamoDB: %w", err)
+		}
+
+		links = append(links, pageLinks...)
+
+		// Check if there are more pages
+		lastEvaluatedKey = result.LastEvaluatedKey
+		if lastEvaluatedKey == nil {
+			break
+		}
+	}
+
+	return links, nil
+}
+
+// AllWithPagination returns links with pagination support
+func (d *LinkRepository) AllWithPagination(ctx context.Context, limit int32, lastKey map[string]ddbtypes.AttributeValue) ([]domain.Link, map[string]ddbtypes.AttributeValue, error) {
+	var links []domain.Link
 
 	input := &dynamodb.ScanInput{
-		TableName: &d.tableName,
-		Limit:     aws.Int32(20),
+		TableName:         &d.tableName,
+		Limit:             aws.Int32(limit),
+		ExclusiveStartKey: lastKey,
 	}
 
 	result, err := d.client.Scan(ctx, input)
-
 	if err != nil {
-		return links, fmt.Errorf("failed to get items from DynamoDB: %w", err)
+		return links, nil, fmt.Errorf("failed to get items from DynamoDB: %w", err)
 	}
 
 	err = attributevalue.UnmarshalListOfMaps(result.Items, &links)
 	if err != nil {
-		return links, fmt.Errorf("failed to unmarshal data from DynamoDB: %w", err)
+		return links, nil, fmt.Errorf("failed to unmarshal data from DynamoDB: %w", err)
 	}
 
-	return links, nil
+	return links, result.LastEvaluatedKey, nil
 }
 
 func (d *LinkRepository) Get(ctx context.Context, id string) (domain.Link, error) {

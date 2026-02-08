@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 
-	"github.com/Furkan-Gulsen/golang-url-shortener/internal/adapters/cache"
-	"github.com/Furkan-Gulsen/golang-url-shortener/internal/adapters/handlers"
-	"github.com/Furkan-Gulsen/golang-url-shortener/internal/adapters/repository"
-	"github.com/Furkan-Gulsen/golang-url-shortener/internal/config"
-	"github.com/Furkan-Gulsen/golang-url-shortener/internal/core/services"
+	"github.com/dheeraj-vp/golang-url-shortener/internal/adapters/cache"
+	"github.com/dheeraj-vp/golang-url-shortener/internal/adapters/handlers"
+	"github.com/dheeraj-vp/golang-url-shortener/internal/adapters/repository"
+	"github.com/dheeraj-vp/golang-url-shortener/internal/config"
+	"github.com/dheeraj-vp/golang-url-shortener/internal/core/services"
 	"github.com/aws/aws-lambda-go/lambda"
 )
 
