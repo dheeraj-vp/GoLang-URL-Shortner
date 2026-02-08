@@ -3,7 +3,6 @@ package repository
 import (
 	"context"
 	"fmt"
-	"log"
 
 	"github.com/dheeraj-vp/golang-url-shortener/internal/core/domain"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -18,17 +17,17 @@ type StatsRepository struct {
 	tableName string
 }
 
-func NewStatsRepository(ctx context.Context, tableName string) *StatsRepository {
+func NewStatsRepository(ctx context.Context, tableName string) (*StatsRepository, error) {
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
-		log.Fatalf("unable to load SDK config, %v", err)
+		return nil, fmt.Errorf("unable to load SDK config: %w", err)
 	}
 
 	client := dynamodb.NewFromConfig(cfg)
 	return &StatsRepository{
 		client:    client,
 		tableName: tableName,
-	}
+	}, nil
 }
 
 func (d *StatsRepository) Get(ctx context.Context, id string) (domain.Stats, error) {

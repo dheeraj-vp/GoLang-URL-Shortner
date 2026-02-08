@@ -1,7 +1,6 @@
 package config
 
 import (
-	"fmt"
 	"log"
 	"os"
 	"strconv"
@@ -48,8 +47,12 @@ func (c *AppConfig) GetSlackParams() (string, string) {
 func (c *AppConfig) GetLinkTableName() string {
 	tableName, ok := os.LookupEnv("LinkTableName")
 	if !ok {
-		fmt.Println("Need LinkTableName environment variable")
-		return os.Getenv("LinkTableName")
+		log.Printf("Warning: LinkTableName environment variable not set, using default: %s", c.dynamoTableName)
+		return c.dynamoTableName
+	}
+	if tableName == "" {
+		log.Printf("Warning: LinkTableName is empty, using default: %s", c.dynamoTableName)
+		return c.dynamoTableName
 	}
 	return tableName
 }
@@ -57,8 +60,12 @@ func (c *AppConfig) GetLinkTableName() string {
 func (c *AppConfig) GetStatsTableName() string {
 	tableName, ok := os.LookupEnv("StatsTableName")
 	if !ok {
-		fmt.Println("Need STATS_TABLE environment variable")
-		return os.Getenv("StatsTableName")
+		log.Printf("Warning: StatsTableName environment variable not set, using default")
+		return "" // Return empty string - caller should handle this
+	}
+	if tableName == "" {
+		log.Printf("Warning: StatsTableName is empty")
+		return ""
 	}
 	return tableName
 }
@@ -66,25 +73,25 @@ func (c *AppConfig) GetStatsTableName() string {
 func (c *AppConfig) GetRedisParams() (string, string, int) {
 	address, ok := os.LookupEnv("RedisAddress")
 	if !ok {
-		fmt.Println("Need RedisAddress environment variable")
+		log.Printf("Warning: RedisAddress environment variable not set, using default: %s", c.redisAddress)
 		return c.redisAddress, c.redisPassword, c.redisDB
 	}
 
 	password, ok := os.LookupEnv("RedisPassword")
 	if !ok {
-		fmt.Println("Need RedisPassword environment variable")
+		log.Printf("Warning: RedisPassword environment variable not set, using default (empty)")
 		return address, c.redisPassword, c.redisDB
 	}
 
 	dbStr, ok := os.LookupEnv("RedisDB")
 	if !ok {
-		fmt.Println("Need RedisDB environment variable")
+		log.Printf("Warning: RedisDB environment variable not set, using default: %d", c.redisDB)
 		return address, password, c.redisDB
 	}
 
 	db, err := strconv.Atoi(dbStr)
 	if err != nil {
-		fmt.Printf("RedisDB environment variable is not a valid integer: %v\n", err)
+		log.Printf("Warning: RedisDB environment variable is not a valid integer (%v), using default: %d", err, c.redisDB)
 		return address, password, c.redisDB
 	}
 

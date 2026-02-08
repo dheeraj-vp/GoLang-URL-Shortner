@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math/big"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/dheeraj-vp/golang-url-shortener/internal/config"
@@ -18,6 +20,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 )
 
@@ -75,8 +78,17 @@ func (h *GenerateLinkFunctionHandler) CreateShortLink(ctx context.Context, req e
 		}
 
 		// Check if it's a collision (DynamoDB conditional check failed)
-		// In production, you'd want to check the specific error type
+		var condCheckErr *ddbtypes.ConditionalCheckFailedException
+		if errors.As(createErr, &condCheckErr) || 
+		   strings.Contains(createErr.Error(), "already exists") {
+			// Collision detected - retry with new ID
+			log.Printf("Collision detected (attempt %d/%d), retrying with new ID", i+1, config.MaxRetries)
+			continue
+		}
+
+		// Other errors should fail immediately (not a collision)
 		log.Printf("Failed to create link (attempt %d/%d): %v", i+1, config.MaxRetries, createErr)
+		return ServerError(createErr)
 	}
 
 	if createErr != nil {

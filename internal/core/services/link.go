@@ -42,6 +42,11 @@ func (service *LinkService) GetOriginalURL(ctx context.Context, shortLinkKey str
 		return nil, fmt.Errorf("failed to get short URL for identifier '%s': %w", shortLinkKey, err)
 	}
 
+	// Validate link exists and has URL
+	if data.OriginalURL == "" {
+		return nil, fmt.Errorf("link '%s' not found or has no URL", shortLinkKey)
+	}
+
 	// Populate cache asynchronously to avoid blocking the response
 	go func() {
 		if err := service.cache.Set(context.Background(), shortLinkKey, data.OriginalURL); err != nil {

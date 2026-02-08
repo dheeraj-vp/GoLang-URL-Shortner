@@ -2,8 +2,8 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"log"
 
 	"github.com/dheeraj-vp/golang-url-shortener/internal/core/domain"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -18,17 +18,17 @@ type LinkRepository struct {
 	tableName string
 }
 
-func NewLinkRepository(ctx context.Context, tableName string) *LinkRepository {
+func NewLinkRepository(ctx context.Context, tableName string) (*LinkRepository, error) {
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
-		log.Fatalf("unable to load SDK config, %v", err)
+		return nil, fmt.Errorf("unable to load SDK config: %w", err)
 	}
 
 	client := dynamodb.NewFromConfig(cfg)
 	return &LinkRepository{
 		client:    client,
 		tableName: tableName,
-	}
+	}, nil
 }
 
 func (d *LinkRepository) All(ctx context.Context) ([]domain.Link, error) {
@@ -121,10 +121,16 @@ func (d *LinkRepository) Create(ctx context.Context, link domain.Link) error {
 	input := &dynamodb.PutItemInput{
 		TableName: &d.tableName,
 		Item:      item,
+		ConditionExpression: aws.String("attribute_not_exists(id)"), // Prevent overwrites (collision detection)
 	}
 
 	_, err = d.client.PutItem(ctx, input)
 	if err != nil {
+		// Check if it's a conditional check failure (collision)
+		var condCheckErr *ddbtypes.ConditionalCheckFailedException
+		if errors.As(err, &condCheckErr) {
+			return fmt.Errorf("link with id '%s' already exists: %w", link.Id, err)
+		}
 		return fmt.Errorf("failed to put item to DynamoDB: %w", err)
 	}
 
